@@ -37,11 +37,22 @@ protected [sql] final class GeneralDiskHashedRelation(partitions: Array[DiskPart
 
   override def getIterator() = {
     // IMPLEMENT ME
-    null
+    if(partitions != null) {
+      val templist: JavaArrayList[DiskPartition] = new JavaArrayList[DiskPartition]()
+      for(temp <- partitions) {
+        templist.add(temp)
+      }
+      templist.iterator().asScala
+    } else {
+      null
+    }
   }
 
   override def closeAllPartitions() = {
     // IMPLEMENT ME
+    for(temp <- partitions) {
+      temp.closePartition()
+    }
   }
 }
 
@@ -64,6 +75,15 @@ private[sql] class DiskPartition (
    */
   def insert(row: Row) = {
     // IMPLEMENT ME
+    if(inputClosed) {
+      throw new SparkException("Input already closed!")      
+    }
+
+    data.add(row)
+    if(measurePartitionSize() > blockSize) {
+      spillPartitionToDisk()
+      data.clear()
+    }
   }
 
   /**
@@ -107,12 +127,19 @@ private[sql] class DiskPartition (
 
       override def next() = {
         // IMPLEMENT ME
-        null
+        currentIterator.next() 
       }
 
       override def hasNext() = {
         // IMPLEMENT ME
-        false
+        if(currentIterator.hasNext) {
+          true
+        } else if(writtenToDisk && fetchNextChunk()){
+          currentIterator = getListFromBytes(byteArray).iterator.asScala
+          true
+        } else {
+          false
+        }
       }
 
       /**
@@ -123,7 +150,12 @@ private[sql] class DiskPartition (
        */
       private[this] def fetchNextChunk(): Boolean = {
         // IMPLEMENT ME
-        false
+        if(chunkSizeIterator.hasNext) {
+          byteArray = getNextChunkBytes(inStream, chunkSizeIterator.next(), byteArray)
+          true
+        } else {
+          false
+        }
       }
     }
   }
@@ -137,7 +169,8 @@ private[sql] class DiskPartition (
    */
   def closeInput() = {
     // IMPLEMENT ME
-    inputClosed = true
+    outStream.close()
+    inputClosed = true    
   }
 
 
@@ -174,6 +207,23 @@ private[sql] object DiskHashedRelation {
                 size: Int = 64,
                 blockSize: Int = 64000) = {
     // IMPLEMENT ME
-    null
+    if(size != 0 && input != null) {
+      var partitions: Array[DiskPartition] = new Array[DiskPartition](size)
+      for(i <- 0 to (size - 1)) {
+        partitions(i) = new DiskPartition("test" + i, blockSize)
+      }
+
+      for(temp <- input) {
+        var pjrow = keyGenerator(temp)
+        partitions(pjrow.hashCode() % size).insert(temp)
+      }
+
+      for(temp <- partitions) {
+        temp.closeInput()
+      }
+      new GeneralDiskHashedRelation(partitions)
+    } else {
+      null
+    }
   }
 }
